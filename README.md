@@ -17,13 +17,14 @@ It asks a few questions at the start, then does the rest on its own. It only pau
 | MySQL | MySQL 8.4, secured like `mysql_secure_installation`, plus a database and user for the app |
 | Nginx | Installed, version number hidden, Laravel server block (runs only `index.php`) |
 | Your app | Deploy key, `git clone`, `composer install`, `npm ci` + `npm run build`, `.env` (production, debug off), migrations, permissions, `php artisan optimize` |
-| HTTPS | Let's Encrypt certificate with auto-renewal and HTTP to HTTPS redirect, only if your DNS already points at the server |
+| Domain | Optional. Without one, the site runs on `http://<server-ip>` |
+| HTTPS | Let's Encrypt certificate with auto-renewal and HTTP to HTTPS redirect, only with a domain whose DNS already points at the server |
 | Updates later | Writes `~/deploy-<app>.sh` for future deploys |
 
 ## Before you run it
 
 1. **Create the server:** Vultr, Ubuntu 26.04 LTS. Adding your SSH key in the Vultr form is optional; the script can copy it from root, or you can paste it in.
-2. **Point your domain** (A record for `@`, and `www` if you want it) at the new server's IP if you want HTTPS straight away. Otherwise, the script tells you the command to run later.
+2. **Domain (optional).** To get HTTPS straight away, point your domain's A record (`@`, and `www` if you want it) at the new server's IP first. No domain yet? Leave the question empty: the site runs on `http://<server-ip>`, and you can add the domain later (see below).
 3. Have these ready:
    - your Mac's **public** SSH key (`cat ~/.ssh/id_farhan.pub`)
    - your repo's **SSH** address (`git@github.com:user/repo.git`)
@@ -42,6 +43,15 @@ sudo bash setup.sh
 It takes about 10 minutes. The full log is saved to `/var/log/vps-setup.log`. The database password is shown once at the end and is **not** written to the log.
 
 **Before closing the root window**, test your login from a new terminal on your Mac. The script prints the `~/.ssh/config` entry to use. If something is wrong, you can still fix it from the open window, or from Vultr's **View Console**.
+
+## Adding a domain later
+
+If you ran the script without a domain:
+
+1. Point the domain's A record (`@`, and `www` if wanted) at the server's IP, and wait until `dig +short yourdomain.com` shows it.
+2. Run `sudo bash setup.sh` again. Use the **same repo and app folder**, and this time enter the domain and say yes to HTTPS.
+
+The script keeps your code and database. It adds an Nginx config for the domain, updates `APP_URL`, and gets the certificate. The IP-address config stays as a fallback.
 
 ## Deploying updates later
 

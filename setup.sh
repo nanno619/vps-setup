@@ -74,6 +74,21 @@ ask() {
   done
 }
 
+# ask_optional "Question" "regex" "hint"  -> prints the answer, or nothing if left empty
+ask_optional() {
+  local prompt=$1 regex=${2-} hint=${3-} answer
+  while true; do
+    read -r -p "  $prompt: " answer
+    if [[ -z $answer ]]; then return 0; fi
+    if [[ -n $regex && ! $answer =~ $regex ]]; then
+      if [[ -n $hint ]]; then warn "$hint"; else warn "That does not look right. Try again."; fi
+      continue
+    fi
+    printf '%s' "$answer"
+    return 0
+  done
+}
+
 # ask_yn "Question" "y|n"  -> exit status 0 for yes, 1 for no
 ask_yn() {
   local prompt=$1 default=${2:-y} answer hint="[Y/n]"
@@ -200,10 +215,6 @@ collect_answers() {
   printf '\n%sYour Laravel app%s\n' "$C_BOLD" "$C_RESET"
   if ask_yn "Deploy a Laravel app from Git now?" y; then
     INSTALL_APP=1
-    DOMAIN=$(ask "Domain name (without www)" "" '^([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$' "Enter just the domain, like cendanastudio.com")
-    DOMAIN=${DOMAIN,,}
-    if ask_yn "Also serve www.$DOMAIN?" y; then WITH_WWW=1; else WITH_WWW=0; fi
-
     while true; do
       REPO_URL=$(ask "Git repo SSH address (git@github.com:user/repo.git)")
       if [[ $REPO_URL =~ ^https://([^/]+)/(.+)$ ]]; then
@@ -215,7 +226,20 @@ collect_answers() {
     done
     REPO_BRANCH=$(ask "Branch to deploy" "main" '^[A-Za-z0-9._/-]+$')
 
-    local default_name=${DOMAIN%%.*}
+    info "No domain yet? Leave it empty: the site will run on http://$SERVER_IP,"
+    info "and you can run this script again later to add the domain and HTTPS."
+    DOMAIN=$(ask_optional "Domain name, without www (optional)" '^([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$' "Enter just the domain, like cendanastudio.com, or leave it empty.")
+    DOMAIN=${DOMAIN,,}
+    WITH_WWW=0
+    if [[ -n $DOMAIN ]] && ask_yn "Also serve www.$DOMAIN?" y; then WITH_WWW=1; fi
+
+    # Default names: from the domain if there is one, otherwise from the repo name.
+    local default_name
+    if [[ -n $DOMAIN ]]; then
+      default_name=${DOMAIN%%.*}
+    else
+      default_name=$(basename "${REPO_URL##*:}" .git)
+    fi
     APP_DIR=$(ask "App folder" "/var/www/$default_name" '^/var/www/[A-Za-z0-9._-]+$' "Use /var/www/<name> with no spaces.")
     APP_NAME=$(ask "App name (shown in the browser title)" "$default_name" '^[^"\\`$]+$' "Avoid quotes, backslashes, \$ and backticks.")
 
@@ -228,11 +252,12 @@ collect_answers() {
       DB_PASS=$(ask_secret "Database password" 12)
     fi
 
-    if ask_yn "Set up free HTTPS (Let's Encrypt)? Your DNS must already point here" y; then
+    ENABLE_HTTPS=0
+    if [[ -z $DOMAIN ]]; then
+      info "HTTPS needs a domain, so it's skipped for now."
+    elif ask_yn "Set up free HTTPS (Let's Encrypt)? Your DNS must already point here" y; then
       ENABLE_HTTPS=1
       LE_EMAIL=$(ask "Email for certificate notices" "" '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' "Enter a valid email address.")
-    else
-      ENABLE_HTTPS=0
     fi
   else
     INSTALL_APP=0
@@ -243,7 +268,11 @@ collect_answers() {
   info "User:          $NEW_USER (SSH key login only)"
   info "Installs:      Nginx, MySQL 8.4, PHP (Ubuntu's version), Composer, firewall, auto-updates"
   if (( INSTALL_APP )); then
-    info "Domain:        $DOMAIN$( (( WITH_WWW )) && printf ' + www.%s' "$DOMAIN")"
+    if [[ -n $DOMAIN ]]; then
+      info "Domain:        $DOMAIN$( (( WITH_WWW )) && printf ' + www.%s' "$DOMAIN")"
+    else
+      info "Domain:        none yet (site on http://$SERVER_IP)"
+    fi
     info "Repo:          $REPO_URL ($REPO_BRANCH)"
     info "App folder:    $APP_DIR"
     info "Database:      $DB_NAME (user $DB_USER)"
@@ -555,7 +584,7 @@ configure_env() {
   set_env "$env" APP_NAME "\"$APP_NAME\""
   set_env "$env" APP_ENV production
   set_env "$env" APP_DEBUG false
-  set_env "$env" APP_URL "$scheme://$DOMAIN"
+  set_env "$env" APP_URL "$scheme://${DOMAIN:-$SERVER_IP}"
   set_env "$env" DB_CONNECTION mysql
   set_env "$env" DB_HOST 127.0.0.1
   set_env "$env" DB_PORT 3306
@@ -581,15 +610,26 @@ fix_permissions() {
 }
 
 configure_site() {
-  step "Nginx config for $DOMAIN"
-  local names=$DOMAIN site="/etc/nginx/sites-available/$DOMAIN"
-  (( WITH_WWW )) && names="$DOMAIN www.$DOMAIN"
+  local site_name names listen_opt site
+  if [[ -n $DOMAIN ]]; then
+    site_name=$DOMAIN
+    names=$DOMAIN
+    (( WITH_WWW )) && names="$DOMAIN www.$DOMAIN"
+    listen_opt=""
+  else
+    # No domain: answer requests to the server's IP address.
+    site_name=$(basename "$APP_DIR")
+    names="_"
+    listen_opt=" default_server"
+  fi
+  site="/etc/nginx/sites-available/$site_name"
+  step "Nginx config for ${DOMAIN:-$SERVER_IP}"
 
   cat > "$site" <<EOF
 # Written by vps-setup. Based on Laravel's deployment docs.
 server {
-    listen 80;
-    listen [::]:80;
+    listen 80${listen_opt};
+    listen [::]:80${listen_opt};
     server_name ${names};
     root ${APP_DIR}/public;
 
@@ -624,14 +664,14 @@ server {
 }
 EOF
   # Keep Certbot's HTTPS additions if the site was set up before.
-  if [[ -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]]; then
+  if [[ -n $DOMAIN && -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]]; then
     info "A certificate already exists; Certbot will re-apply HTTPS below."
   fi
-  ln -sf "$site" "/etc/nginx/sites-enabled/$DOMAIN"
+  ln -sf "$site" "/etc/nginx/sites-enabled/$site_name"
   rm -f /etc/nginx/sites-enabled/default
   nginx -t 2>/dev/null || die "Nginx config test failed. See: nginx -t"
   systemctl reload nginx
-  ok "Site enabled: http://$DOMAIN"
+  ok "Site enabled: http://${DOMAIN:-$SERVER_IP}"
 }
 
 setup_https() {
@@ -699,7 +739,7 @@ EOF
 }
 
 final_summary() {
-  local url="http://$DOMAIN"
+  local url="http://${DOMAIN:-$SERVER_IP}"
   (( ${HTTPS_DONE:-0} )) && url="https://$DOMAIN"
 
   to_tty ""
@@ -721,6 +761,10 @@ final_summary() {
     to_tty "${C_BOLD}2. Your site${C_RESET}:  $url"
     to_tty "   Code:    $APP_DIR"
     to_tty "   Updates: ~/$(basename "$DEPLOY_SCRIPT")   (run as $NEW_USER)"
+    if [[ -z $DOMAIN ]]; then
+      to_tty "   Adding a domain later: point its A record at $SERVER_IP, then run"
+      to_tty "   'sudo bash setup.sh' again with the same repo and folder, and enter the domain."
+    fi
     to_tty ""
     to_tty "${C_BOLD}3. Database password (shown once, not saved in the log)${C_RESET}"
     to_tty "   Database: $DB_NAME   User: $DB_USER   Password: $DB_PASS"
