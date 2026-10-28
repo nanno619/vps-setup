@@ -203,7 +203,24 @@ collect_answers() {
   if [[ -s /root/.ssh/authorized_keys ]] && ask_yn "Copy root's existing SSH key(s) to $NEW_USER?" y; then
     SSH_PUBKEY="__COPY_ROOT__"
   else
-    info "On your Mac, run:  cat ~/.ssh/id_farhan.pub   (or your own .pub file)"
+    # Shown as text for the Mac, so the ~ must stay literal.
+    # shellcheck disable=SC2088
+    local keyfile="~/.ssh/id_$NEW_USER"
+    printf '\n' >&2
+    info "You log in with an SSH key instead of a password. Open Terminal on your Mac (not this server):"
+    info ""
+    info "  Already have a key?  Show it with:"
+    info "      cat $keyfile.pub"
+    info ""
+    info "  No key yet?  Create one, then show it:"
+    info "      ssh-keygen -t ed25519 -f $keyfile -C \"$NEW_USER@$(hostname)\""
+    info "      cat $keyfile.pub"
+    info ""
+    info "  ssh-keygen asks for a passphrase: an extra password protecting the key file. Recommended."
+    info "  If it asks 'Overwrite (y/n)?', answer n: you already have that key, so just use cat."
+    info "  Copy the single line starting with 'ssh-ed25519' (or 'ssh-rsa' / 'ecdsa-'). It's safe to share;"
+    info "  the file WITHOUT .pub is your private key and must never leave your Mac."
+    printf '\n' >&2
     while true; do
       read -r -p "  Paste your PUBLIC SSH key (starts with ssh-...): " SSH_PUBKEY
       if printf '%s\n' "$SSH_PUBKEY" | ssh-keygen -l -f /dev/stdin >/dev/null 2>&1; then break; fi
