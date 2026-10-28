@@ -26,7 +26,7 @@ It asks a few questions at the start, then does the rest on its own. It only pau
 1. **Create the server:** Vultr, Ubuntu 26.04 LTS. Adding your SSH key in the Vultr form is optional; the script can copy it from root, or you can paste it in.
 2. **Domain (optional).** To get HTTPS straight away, point your domain's A record (`@`, and `www` if you want it) at the new server's IP first. No domain yet? Leave the question empty: the site runs on `http://<server-ip>`, and you can add the domain later (see below).
 3. Have these ready:
-   - your Mac's **public** SSH key (`cat ~/.ssh/id_farhan.pub`)
+   - your Mac's **public** SSH key (`cat ~/.ssh/id_farhan.pub`). No key yet? On your Mac, run `ssh-keygen -t ed25519 -f ~/.ssh/id_farhan` first; the script also shows these commands.
    - your repo's **SSH** address (`git@github.com:user/repo.git`)
    - an email address for Let's Encrypt
 
